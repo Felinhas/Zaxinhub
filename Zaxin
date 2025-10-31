@@ -635,6 +635,7 @@ local Tab2 = Window:MakeTab({"Fun", "fun"})
 local Tab3 = Window:MakeTab({"Troll", "skull"})
 local Tab4 = Window:MakeTab({"OP", "home"})
 local Tab5 = Window:MakeTab({"Teleporte", "map-pin"})
+local Tab6 = Window:MakeTab({"Proteção", "shieldcheck"})
 
 -- Tab1
 local Section = Tab1:AddSection({"Servidor Discord"})
@@ -1622,3 +1623,73 @@ for _, btn in ipairs(teleportButtons) do
         end
     })
 end
+
+
+
+
+Tab6:AddButton({
+    Name = "Proteção Bug",
+    Description = "Cria uma Proteção contra bug all",
+    Callback = function()
+        local Players = game:GetService("Players")
+        local LocalPlayer = Players.LocalPlayer
+
+        local blacklist = {
+            {Name = "water", Class = "Part"},
+        }
+
+        local function neutralize(part)
+            if part and part:IsA("BasePart") then
+                pcall(function()
+                    part.Anchored = true
+                    part.CanCollide = false
+                    part.Massless = true
+                    part.Transparency = 1
+                    part:ClearAllChildren()
+                end)
+                pcall(function()
+                    part:Destroy()
+                end)
+            end
+        end
+
+        workspace.DescendantAdded:Connect(function(obj)
+            for _, rule in ipairs(blacklist) do
+                if obj.Name == rule.Name and obj.ClassName == rule.Class then
+                    neutralize(obj)
+                end
+            end
+        end)
+
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            for _, rule in ipairs(blacklist) do
+                if obj.Name == rule.Name and obj.ClassName == rule.Class then
+                    neutralize(obj)
+                end
+            end
+        end
+
+        task.spawn(function()
+            while task.wait(0.25) do
+                for _, rule in ipairs(blacklist) do
+                    for _, v in next, getnilinstances() do
+                        if v.Name == rule.Name and v.ClassName == rule.Class then
+                            neutralize(v)
+                        end
+                    end
+                end
+            end
+        end)
+
+        LocalPlayer.CharacterAdded:Connect(function(char)
+            local hum = char:WaitForChild("Humanoid")
+            hum.Touched:Connect(function(hit)
+                for _, rule in ipairs(blacklist) do
+                    if hit.Name == rule.Name and hit.ClassName == rule.Class then
+                        neutralize(hit)
+                    end
+                end
+            end)
+        end)
+    end
+})
