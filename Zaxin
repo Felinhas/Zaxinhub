@@ -42,11 +42,12 @@ local Paragraph = Tab2:AddParagraph({"Em Manutenção.", "problemas ocorreram"})
 
 -- Tab3 Troll
 local Players = game:GetService("Players")
+
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local LocalPlayer = Players.LocalPlayer
 
+local LocalPlayer = Players.LocalPlayer
 local selectedPlayer = nil
 local isFollowingKill = false
 local isFollowingPull = false
@@ -55,30 +56,79 @@ local connection = nil
 local flingConnection = nil
 local originalPosition = nil
 local savedPosition = nil
+local originalProperties = {}
 local selectedKillPullMethod = nil
-local SpectateToggleTab10 = nil
+local selectedFlingMethod = nil
+local soccerBall = nil
+local couch = nil
+local isSpectating = false
+local spectatedPlayer = nil
+local characterConnection = nil
+local flingToggle = nil
 
+local SetNetworkOwnerEvent = Instance.new("RemoteEvent")
+SetNetworkOwnerEvent.Name = "SetNetworkOwnerEvent_" .. tostring(math.random(1000, 9999))
+SetNetworkOwnerEvent.Parent = ReplicatedStorage
 
-local function getPlayerNames()
-    local names = {}
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then table.insert(names, p.Name) end
+local serverScriptCode = [[
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local event = ReplicatedStorage:WaitForChild("]] .. SetNetworkOwnerEvent.Name .. [[")
+    
+    event.OnServerEvent:Connect(function(player, part, networkOwner)
+        if part and part:IsA("BasePart") then
+            pcall(function()
+                part:SetNetworkOwner(networkOwner)
+                part.Anchored = false
+                part.CanCollide = true
+                part.CanTouch = true
+            end)
+        end
+    end)
+]]
+
+pcall(function()
+    loadstring(serverScriptCode)()
+end)
+
+local function disableCarClient()
+    local backpack = LocalPlayer:WaitForChild("Backpack")
+    local carClient = backpack:FindFirstChild("CarClient")
+    if carClient and carClient:IsA("LocalScript") then
+        carClient.Disabled = true
     end
-    return names
 end
 
--- dropdown atualização (função reutilizável)
+local function enableCarClient()
+    local backpack = LocalPlayer:WaitForChild("Backpack")
+    local carClient = backpack:FindFirstChild("CarClient")
+    if carClient and carClient:IsA("LocalScript") then
+        carClient.Disabled = false
+    end
+end
+
+local function getPlayerNames()
+    local playerNames = {}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            table.insert(playerNames, player.Name)
+        end
+    end
+    return playerNames
+end
+
 local function updateDropdown(dropdown, spectateToggle)
     pcall(function()
         local currentValue = dropdown:Get()
         local playerNames = getPlayerNames()
-        dropdown:Set(playerNames)
+        dropdown:Set(playerNames) -- Usando :Set como solicitado
         if currentValue and not table.find(playerNames, currentValue) then
             dropdown:Set("")
             selectedPlayer = nil
             if isSpectating then
                 stopSpectating()
-                if spectateToggle then spectateToggle:Set(false) end
+                if spectateToggle then
+                    pcall(function() spectateToggle:Set(false) end)
+                end
             end
             if running or isFollowingKill or isFollowingPull then
                 running = false
@@ -86,28 +136,29 @@ local function updateDropdown(dropdown, spectateToggle)
                 isFollowingPull = false
                 if connection then connection:Disconnect() connection = nil end
                 if flingConnection then flingConnection:Disconnect() flingConnection = nil end
-                if SpectateToggleTab10 then SpectateToggleTab10:Set(false) end
+                if flingToggle then pcall(function() flingToggle:Set(false) end) end
             end
         elseif currentValue and table.find(playerNames, currentValue) then
-            dropdown:Set(currentValue)
+            dropdown:Set(currentValue) -- Mantém seleção se jogador ainda está no jogo
         end
     end)
 end
 
--- spectate
-local isSpectating = false
-local spectatedPlayer = nil
-local characterConnection = nil
+
+
+
 
 local function spectatePlayer(playerName)
     if characterConnection then
         characterConnection:Disconnect()
         characterConnection = nil
     end
+
     local targetPlayer = Players:FindFirstChild(playerName)
     if targetPlayer and targetPlayer ~= LocalPlayer then
         spectatedPlayer = targetPlayer
         isSpectating = true
+
         local function updateCamera()
             if not isSpectating or not spectatedPlayer then return end
             if spectatedPlayer.Character and spectatedPlayer.Character:FindFirstChild("Humanoid") then
@@ -116,8 +167,21 @@ local function spectatePlayer(playerName)
                 Workspace.CurrentCamera.CameraSubject = nil
             end
         end
+
         updateCamera()
-        characterConnection = RunService.Heartbeat:Connect(updateCamera)
+
+
+
+
+        characterConnection = RunService.Heartbeat:Connect(function()
+            if not isSpectating then
+                characterConnection:Disconnect()
+                characterConnection = nil
+                return
+            end
+            pcall(updateCamera)
+        end)
+
         spectatedPlayer.CharacterAdded:Connect(function()
             if isSpectating then updateCamera() end
         end)
@@ -132,8 +196,10 @@ local function stopSpectating()
         characterConnection:Disconnect()
         characterConnection = nil
     end
+
     isSpectating = false
     spectatedPlayer = nil
+
     if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
         Workspace.CurrentCamera.CameraSubject = LocalPlayer.Character.Humanoid
         Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
@@ -143,41 +209,66 @@ local function stopSpectating()
     end
 end
 
--- teleport seguro
+-- Função para teletransportar para o jogador selecionado (com ancoragem segura)
 local function teleportToPlayer(playerName)
     local targetPlayer = Players:FindFirstChild(playerName)
     if targetPlayer and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
         local myHRP = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
         local myHumanoid = LocalPlayer.Character:FindFirstChild("Humanoid")
+        if not myHRP or not myHumanoid then
+            print("Seu personagem não está totalmente carregado para teletransporte.")
+            return
+        end
+
+        -- Zerar a física do personagem antes do teleporte
         for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.Velocity = Vector3.zero
                 part.RotVelocity = Vector3.zero
-                part.Anchored = true
+                part.Anchored = true -- Ancorar temporariamente para evitar movimento
             end
         end
-        pcall(function()
-            myHRP.CFrame = CFrame.new(targetPlayer.Character.HumanoidRootPart.Position + Vector3.new(0,2,0))
+
+        -- Teleportar para a posição do jogador-alvo
+        local success, errorMessage = pcall(function()
+            myHRP.CFrame = CFrame.new(targetPlayer.Character.HumanoidRootPart.Position + Vector3.new(0, 2, 0)) -- Leve elevação para evitar colisão com o chão
         end)
-        if myHumanoid then
-            myHumanoid.Sit = false
-            myHumanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+        if not success then
+            warn("Erro ao teletransportar: " .. tostring(errorMessage))
+            return
         end
+
+        -- Garantir que o Humanoid saia do estado sentado ou voando
+        myHumanoid.Sit = false
+        myHumanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+
+        -- Aguardar 0,5 segundos com o personagem ancorado
         task.wait(0.5)
+
+        -- Desancorar todas as partes do personagem e restaurar física
         for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.Anchored = false
+                part.Velocity = Vector3.zero
+                part.RotVelocity = Vector3.zero
             end
         end
+
+        print("Teletransportado para o jogador: " .. playerName .. " com ancoragem segura.")
+    else
+        print("Jogador ou personagem não encontrado para teletransporte.")
     end
 end
 
-LocalPlayer.CharacterAdded:Connect(function()
-    if isSpectating then stopSpectating() end
+LocalPlayer.CharacterAdded:Connect(function(character)
+    if isSpectating then
+        stopSpectating()
+        pcall(function() SpectateToggleTab10:Set(false) end)
+    end
 end)
 
--- Dropdown Troll
 local valor_do_nome_do_joagdor
+
 local DropdownPlayerTab2 = Tab3:AddDropdown({
     Name = "Selecionar Jogador",
     Description = "Escolha um jogador",
@@ -187,69 +278,113 @@ local DropdownPlayerTab2 = Tab3:AddDropdown({
     Flag = "player list",
     Callback = function(selectedPlayerName)
         valor_do_nome_do_joagdor = selectedPlayerName
-        if selectedPlayerName == "" or not selectedPlayerName then
+        if selectedPlayerName == "" or selectedPlayerName == nil then
             selectedPlayer = nil
             if running or isFollowingKill or isFollowingPull then
                 running = false
                 isFollowingKill = false
                 isFollowingPull = false
+                if connection then connection:Disconnect() end
+                if flingConnection then flingConnection:Disconnect() end
+                if flingToggle then pcall(function() flingToggle:Set(false) end) end
             end
-            stopSpectating()
+            if isSpectating then stopSpectating() end
         else
             selectedPlayer = Players:FindFirstChild(selectedPlayerName)
-            stopSpectating()
-            spectatePlayer(selectedPlayerName)
+            if isSpectating then
+                stopSpectating()
+                spectatePlayer(selectedPlayerName)
+            end
         end
     end
 })
 
 function UptadePlayers()
-    DropdownPlayerTab2:Set(getPlayerNames())
+    local playerNames = {}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.Name ~= LocalPlayer.Name then
+            table.insert(playerNames, player.Name)
+        end
+    end
+    DropdownPlayerTab2:Set(playerNames)
 end
 
--- atualiza automaticamente quando jogador entra/sai
-Players.PlayerAdded:Connect(function() UptadePlayers() end)
-Players.PlayerRemoving:Connect(function() UptadePlayers() end)
+Tab3:AddButton({"Atualizar lista", function()
+    UptadePlayers()
+end})
 
-Tab3:AddButton({"Atualizar lista", function() UptadePlayers() end})
 UptadePlayers()
+
 
 Tab3:AddButton({
     Title = "Teleportar para Jogador",
     Desc = "Clique para teletransportar para o jogador selecionado",
     Callback = function()
-        if valor_do_nome_do_joagdor and valor_do_nome_do_joagdor ~= "" then
-            teleportToPlayer(valor_do_nome_do_joagdor)
+        local selectedPlayerName = valor_do_nome_do_joagdor
+        if selectedPlayerName and selectedPlayerName ~= "" then
+            local success, errorMessage = pcall(teleportToPlayer, selectedPlayerName)
+            if not success then
+                warn("Erro ao teletransportar: " .. tostring(errorMessage))
+            end
         else
             print("Selecione um jogador antes de teletransportar.")
         end
     end
 })
 
--- Toggle Spectate
-SpectateToggleTab10 = Tab3:AddToggle({
+local SpectateToggleTab10 = Tab3:AddToggle({
     Name = "Visualizar Jogador",
     Description = "Ativa/desativa a visualização do jogador selecionado",
     Default = false,
     Callback = function(state)
         if state then
             if selectedPlayer then
-                spectatePlayer(selectedPlayer.Name)
+                pcall(spectatePlayer, selectedPlayer.Name)
             else
-                SpectateToggleTab10:Set(false) -- desliga se nenhum jogador selecionado
+                SpectateToggleTab10:Set(false)
             end
         else
-            stopSpectating()
+            pcall(stopSpectating)
         end
     end
 })
--- Seção Trolar Kill
-Tab3:AddSection({"Trolar Kill"})
+
+-- Remoção automática de jogadores que saem
+Players.PlayerRemoving:Connect(function(player)
+    updateDropdown(DropdownPlayerTab2, SpectateToggleTab10)
+    if selectedPlayer == player then
+        selectedPlayer = nil
+        if isSpectating then stopSpectating() end
+        if running then
+            running = false
+            if connection then connection:Disconnect() connection = nil end
+            if flingConnection then flingConnection:Disconnect() flingConnection = nil end
+            if flingToggle then flingToggle:Set(false) end
+        end
+        SpectateToggleTab10:Set(false)
+        DropdownPlayerTab2:Set("")
+    end
+end)
+
+-- Atualização automática quando um novo jogador entra
+Players.PlayerAdded:Connect(function()
+    task.wait(1) -- pequeno delay para garantir que o jogador esteja pronto
+    updateDropdown(DropdownPlayerTab2, SpectateToggleTab10)
+end)
+
+-- Inicializa o dropdown
+updateDropdown(DropdownPlayerTab2, SpectateToggleTab10)
+
+
+local Section = Tab3:AddSection({"Trolar Kill"})
+
 local DropdownKillPullMethod = Tab3:AddDropdown({
     Name = "Kill or bring",
     Description = "Escolha o método para matar ou puxar",
     Options = {"Sofá", "Ônibus"},
-    Callback = function(value) selectedKillPullMethod = value end
+    Callback = function(value)
+        selectedKillPullMethod = value
+    end
 })
 
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -258,23 +393,17 @@ local DropdownKillPullMethod = Tab3:AddDropdown({
 
 local function equipSofa()
     local backpack = LocalPlayer:WaitForChild("Backpack")
-    local sofa = backpack:FindFirstChild("Couch") or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Couch"))
+    local sofa = backpack:FindFirstChild("Couch") or LocalPlayer.Character:FindFirstChild("Couch")
     if not sofa then
         local args = { [1] = "PickingTools", [2] = "Couch" }
-        local successInvoke = pcall(function()
-            local re = ReplicatedStorage:FindFirstChild("RE")
-            if re and re:FindFirstChild("1Too1l") then
-                re:FindFirstChild("1Too1l"):InvokeServer(unpack(args))
-            end
+        local success = pcall(function()
+            ReplicatedStorage:WaitForChild("RE"):WaitForChild("1Too1l"):InvokeServer(unpack(args))
         end)
-        if not successInvoke then return false end
-        local attempts = 0
+        if not success then return false end
         repeat
-            sofa = backpack:FindFirstChild("Couch") or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Couch"))
-            task.wait(0.2)
-            attempts = attempts + 1
-            if attempts > 25 then break end
-        until sofa
+            sofa = backpack:FindFirstChild("Couch")
+            task.wait()
+        until sofa or task.wait(5)
         if not sofa then return false end
     end
     if sofa.Parent ~= LocalPlayer.Character then
@@ -287,19 +416,20 @@ local function killWithSofa(targetPlayer)
     if not targetPlayer or not targetPlayer.Character or not LocalPlayer.Character then return end
     if not equipSofa() then return end
     isFollowingKill = true
-    originalPosition = LocalPlayer.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character.HumanoidRootPart.Position
+    originalPosition = LocalPlayer.Character:FindFirstChild("HumanoidRootPart").Position
 end
 
 local function pullWithSofa(targetPlayer)
     if not targetPlayer or not targetPlayer.Character or not LocalPlayer.Character then return end
     if not equipSofa() then return end
     isFollowingPull = true
-    originalPosition = LocalPlayer.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character.HumanoidRootPart.Position
+    originalPosition = LocalPlayer.Character:FindFirstChild("HumanoidRootPart").Position
 end
 
 ----------------------------------------------------------------------------
                                                    --fling com onibus--
 ----------------------------------------------------------------------------
+
 
 local function killWithBus(targetPlayer)
     if not targetPlayer or not targetPlayer.Character or not LocalPlayer.Character then return end
@@ -323,17 +453,11 @@ local function killWithBus(targetPlayer)
 
     local args = { [1] = "DeleteAllVehicles" }
     pcall(function()
-        local re = ReplicatedStorage:FindFirstChild("RE")
-        if re and re:FindFirstChild("1Ca1r") then
-            re:FindFirstChild("1Ca1r"):FireServer(unpack(args))
-        end
+        ReplicatedStorage:WaitForChild("RE"):WaitForChild("1Ca1r"):FireServer(unpack(args))
     end)
     args = { [1] = "PickingCar", [2] = "SchoolBus" }
     pcall(function()
-        local re = ReplicatedStorage:FindFirstChild("RE")
-        if re and re:FindFirstChild("1Ca1r") then
-            re:FindFirstChild("1Ca1r"):FireServer(unpack(args))
-        end
+        ReplicatedStorage:WaitForChild("RE"):WaitForChild("1Ca1r"):FireServer(unpack(args))
     end)
     task.wait(1)
     local vehiclesFolder = Workspace:FindFirstChild("Vehicles")
@@ -413,10 +537,7 @@ local function killWithBus(targetPlayer)
 
             local args = { [1] = "DeleteAllVehicles" }
             pcall(function()
-                local re = ReplicatedStorage:FindFirstChild("RE")
-                if re and re:FindFirstChild("1Ca1r") then
-                    re:FindFirstChild("1Ca1r"):FireServer(unpack(args))
-                end
+                ReplicatedStorage:WaitForChild("RE"):WaitForChild("1Ca1r"):FireServer(unpack(args))
             end)
             if character then
                 local myHRP = character:FindFirstChild("HumanoidRootPart")
@@ -447,10 +568,7 @@ local function killWithBus(targetPlayer)
                 if seat:IsA("Seat") or seat:IsA("VehicleSeat") then seat.Disabled = false end
             end
             pcall(function()
-                local re = ReplicatedStorage:FindFirstChild("RE")
-                if re and re:FindFirstChild("1Clothe1s") then
-                    re:FindFirstChild("1Clothe1s"):FireServer("CharacterSizeUp", 1)
-                end
+                ReplicatedStorage:WaitForChild("RE"):WaitForChild("1Clothe1s"):FireServer("CharacterSizeUp", 1)
             end)
         end
     end)
@@ -483,10 +601,7 @@ sitCheckConnection = RunService.Heartbeat:Connect(function()
                     if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
                         LocalPlayer.Character:SetPrimaryPartCFrame(CFrame.new(0, -500, 0))
                         task.wait(0.5)
-                        local re = ReplicatedStorage:FindFirstChild("RE")
-                        if re and re:FindFirstChild("1Too1l") then
-                            re:FindFirstChild("1Too1l"):InvokeServer("PickingTools", "Couch")
-                        end
+                        ReplicatedStorage:WaitForChild("RE"):WaitForChild("1Too1l"):InvokeServer("PickingTools", "Couch")
                         task.wait(1)
                     end
                 end
@@ -535,27 +650,28 @@ Tab3:AddButton({
     end
 })
 
+
+
+
 Tab3:AddButton({
     Name = "Parar Movimento",
     Description = "Para o movimento de matar ou puxar",
     Callback = function()
         isFollowingKill = false
         isFollowingPull = false
-        if LocalPlayer.Character then
-            for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    part.CanCollide = true
-                    part.Velocity = Vector3.zero
-                    part.RotVelocity = Vector3.zero
-                end
+        for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = true
+                part.Velocity = Vector3.zero
+                part.RotVelocity = Vector3.zero
             end
-            local myHumanoid = LocalPlayer.Character:FindFirstChild("Humanoid")
-            if myHumanoid then myHumanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true) end
         end
+        local myHumanoid = LocalPlayer.Character:FindFirstChild("Humanoid")
+        if myHumanoid then myHumanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true) end
         for _, seat in ipairs(Workspace:GetDescendants()) do
             if seat:IsA("Seat") or seat:IsA("VehicleSeat") then seat.Disabled = false end
         end
-        if originalPosition and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        if originalPosition then
             local myHRP = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
             if myHRP then
                 myHRP.Anchored = true
@@ -564,7 +680,6 @@ Tab3:AddButton({
                 myHRP.Velocity = Vector3.zero
                 myHRP.RotVelocity = Vector3.zero
                 myHRP.Anchored = false
-                local myHumanoid = LocalPlayer.Character:FindFirstChild("Humanoid")
                 if myHumanoid then myHumanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end
             end
             originalPosition = nil
@@ -574,13 +689,15 @@ Tab3:AddButton({
 
         local args = { [1] = "DeleteAllVehicles" }
         pcall(function()
-            local re = ReplicatedStorage:FindFirstChild("RE")
-            if re and re:FindFirstChild("1Ca1r") then
-                re:FindFirstChild("1Ca1r"):FireServer(unpack(args))
-            end
+            ReplicatedStorage:WaitForChild("RE"):WaitForChild("1Ca1r"):FireServer(unpack(args))
         end)
     end
 })
+
+local Section = Tab3:AddSection({" Em breve"})
+
+
+
 
 
 Tab4:AddButton({
